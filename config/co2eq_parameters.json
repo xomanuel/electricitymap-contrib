@@ -45,6 +45,10 @@
         "source": "IPCC 2014",
         "value": 12
       },
+      "ocean": {
+        "source": "IPCC 2014",
+        "value": 17
+      },
       "oil": {
         "_comment": "UK Parliamentary Office of Science and Technology (2006) 'Carbon footprint of electricity generation'",
         "source": "UK POST 2014",
