@@ -39,6 +39,7 @@ mock = "2.0.0"
 pylint = "^2.6.0"
 requests-mock = "1.3.0"
 testfixtures = "6.0.0"
+black = {version = "^21.9b0", allow-prereleases = true}
 
 [tool.poetry.scripts]
 lint = 'scripts:lint'
