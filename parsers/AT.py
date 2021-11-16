@@ -1,13 +1,14 @@
 import datetime
 import json
-import os
 import time
 from io import StringIO
+from time import sleep
 
 import arrow
 import pandas as pd
 import requests
 from dateutil import tz
+from tqdm import tqdm
 
 APG_API_BASE = "https://transparency.apg.at/transparency-api/api/v1"
 EXCHANGE_API = "{}/Download/CBPF/German/M15".format(APG_API_BASE)
@@ -35,7 +36,7 @@ EXCHANGES = {
 }
 
 
-def format_date(date):
+def format_date(date: datetime.date) -> str:
     """
     Format a date as expected by the APG api
     Return: the date object as formatted string
@@ -55,20 +56,19 @@ def fetch_exchange(
         )
 
     if target_datetime is None:
-        date = datetime.date.today()
+        date = arrow.utcnow().floor("day")
     else:
-        date = target_datetime.date()
+        date = arrow.get(target_datetime).to("utc")
 
     # TODO do we really need to fetch the document for each and every interconnector separately?
     exchange_data_of_day = fetch_exchanges_for_date(date, session=session).dropna()
 
     data = []
-    for label, row in exchange_data_of_day.iterrows():
+    for _, row in exchange_data_of_day.iterrows():
         flow = EXCHANGES[exchange](row)
-        end_time = arrow.get(row[COL_TO], tz.gettz("Europe/Vienna"))
         row_data = {
             "sortedZoneKeys": exchange,
-            "datetime": end_time.datetime,
+            "datetime": row.datetime.to_pydatetime(),
             "netFlow": flow,
             "source": "transparency.apg.at",
         }
@@ -77,14 +77,14 @@ def fetch_exchange(
     return data
 
 
-def fetch_exchanges_for_date(date, session=None):
+def fetch_exchanges_for_date(date: arrow.Arrow, session=None) -> pd.DataFrame:
     """
     Fetches all Austrian exchanges for a given date.
     Return: the exchange values of the requested day as a pandas DataFrame
     """
     # build the request url
-    from_date = format_date(date)
-    to_date = format_date(date + datetime.timedelta(days=1))
+    from_date = format_date(date.date())
+    to_date = format_date(date.shift(days=+1).date())
     export_request_url = "{}/{}/{}".format(EXCHANGE_API, from_date, to_date)
 
     s = session or requests.Session()
@@ -111,13 +111,23 @@ def fetch_exchanges_for_date(date, session=None):
     csv_response.encoding = csv_response.apparent_encoding
     csv_str = csv_response.text
 
+    # create a dt index that is not sensitive to daylight saving time
+    dt_index = pd.date_range(
+        date.replace(tzinfo=None).format("YYYY-MM-DD HH:mm:ss"),
+        date.shift(days=+1).replace(tzinfo=None).format("YYYY-MM-DD HH:mm:ss"),
+        freq="15min",
+        tz="Europe/Vienna",
+    )
+    dt_index = dt_index[:-1]
+
     try:
         csv_data = pd.read_csv(
             StringIO(csv_str),
             delimiter=";",
-            parse_dates=[COL_FROM, COL_TO],
             dayfirst=True,
         )
+        csv_data.loc[:, "datetime"] = dt_index
+        csv_data = csv_data.drop(columns=[COL_FROM, COL_TO])
     except:
         raise ValueError("The downloaded csv file has an unexpected format")
 
@@ -135,30 +145,40 @@ def fetch_exchanges_for_date(date, session=None):
 def fetch_historical_exchanges():
     # Daily data
     countries = [ex.split("AT->")[1] for ex in EXCHANGES.keys()]
-    datetimes = pd.date_range("2019-01-01", "2021-01-01", freq="D")
-    # all_exchanges_df = pd.DataFrame(
-    #     columns=[
-    #         "sortedZoneKeys",
-    #         "datetime",
-    #         "netFlow",
-    #         "source",
-    #     ]
-    # )
+    to_fetch_datetimes = pd.date_range("2018-12-31", "2021-01-01", freq="D")
     _dfs = []
-    for country in countries:
-        for dt in datetimes:
-            exchanges = fetch_exchange(
-                "AT",
-                country,
-                target_datetime=datetime.datetime(
-                    year=dt.year, month=dt.month, day=dt.day
-                ),
-            )
-            _dfs.append(pd.DataFrame.from_records(exchanges))
+    inner_break = False
+    for country in tqdm(countries):
+        if inner_break:
             break
+        with tqdm(total=len(to_fetch_datetimes)) as pbar:
+            sleep(1)
+            for i, dt in enumerate(to_fetch_datetimes):
+                if i % 7 == 0:
+                    pbar.set_description("Fetching {}".format(country))
+                    pbar.update(7)
+                try:
+                    exchanges = fetch_exchange(
+                        "AT",
+                        country,
+                        target_datetime=datetime.datetime(
+                            year=dt.year, month=dt.month, day=dt.day
+                        ),
+                    )
+                except BaseException as e:
+                    print(f"Something went wrong, stopping fetching. {e}")
+                    inner_break = True
+                    break
+                _dfs.append(pd.DataFrame.from_records(exchanges))
 
     all_exchanges_df = pd.concat(_dfs)
-    print(all_exchanges_df)
+    all_exchanges_df = all_exchanges_df[
+        all_exchanges_df.datetime >= "2019-01-01 00:00:00+01:00"
+    ]
+    all_exchanges_df = all_exchanges_df[
+        all_exchanges_df.datetime <= "2020-12-31 23:00:00+01:00"
+    ]
+    all_exchanges_df.to_csv("at_exchanges.csv", index=False)
 
 
 # TODO what dooes this do ?
