@@ -1,11 +1,12 @@
 import { ScaleLinear } from 'd3-scale';
 import { Maybe } from 'types';
+
 import { LABEL_MAX_WIDTH, RECT_OPACITY, ROW_HEIGHT } from '../constants';
 
 type Props = {
   className: string;
   fill: string;
-  range: [Maybe<number>, Maybe<number>];
+  range: Maybe<number>[];
   scale: ScaleLinear<number, number, never>;
 };
 
@@ -32,6 +33,7 @@ export default function HorizontalBar({ className, fill, range, scale }: Props) 
       opacity={RECT_OPACITY}
       shapeRendering="crispEdges"
       x={LABEL_MAX_WIDTH + scale(x1)}
+      y={1}
       width={width}
     />
   );

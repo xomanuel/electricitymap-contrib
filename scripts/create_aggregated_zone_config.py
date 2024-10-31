@@ -30,19 +30,17 @@ def create_aggregated_config(zoneKey: str, timezone: str):
     zone.parsers = None
     for path in Path("config/zones").glob(f"{zoneKey}-*.yaml"):
         if path.is_file():
-            with open(path, "r") as file:
+            with open(path) as file:
                 subzone = yaml.safe_load(file.read())
                 zone.sub_zone_names.append(path.stem)
-                if "contributors" in subzone.keys():
+                if "contributors" in subzone:
                     zone.contributors = list(
                         set(zone.contributors + subzone["contributors"])
                     )
-                if "capacity" in subzone.keys():
+                if "capacity" in subzone:
                     capacities: dict = subzone["capacity"]
                     for key, capacity in capacities.items():
-                        mapped_key = (
-                            key if not key in NAME_MAPPING else NAME_MAPPING[key]
-                        )
+                        mapped_key = NAME_MAPPING.get(key, key)
                         if capacity is not None:
                             current_capacity = zone.capacity.__getattribute__(
                                 mapped_key

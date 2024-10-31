@@ -8,9 +8,10 @@ and exposes them via a unified API.
 Requires an API key, set in the EIA_KEY environment variable. Get one here:
 https://www.eia.gov/opendata/register.php
 """
+
 from datetime import datetime, timedelta
 from logging import Logger, getLogger
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import arrow
 from dateutil import parser, tz
@@ -370,12 +371,27 @@ PRODUCTION_MIX = (
 )
 EXCHANGE = f"{BASE_URL}/interchange-data/data/" "?data[]=value{}&frequency=hourly"
 
+FILTER_INCOMPLETE_DATA_BYPASSED_MODES = {
+    "US-TEX-ERCO": ["biomass", "geothermal", "oil"],
+    "US-NW-PGE": [
+        "biomass",
+        "geothermal",
+        "oil",
+        "solar",
+    ],  # Solar is not reported by PGE.
+    "US-NW-PACE": ["biomass", "geothermal", "oil"],
+    "US-MIDW-MISO": ["biomass", "geothermal", "oil"],
+    "US-TEN-TVA": ["biomass", "geothermal", "oil"],
+    "US-SE-SOCO": ["biomass", "geothermal", "oil"],
+    "US-FLA-FPL": ["biomass", "geothermal", "oil"],
+}
+
 
 @refetch_frequency(timedelta(days=1))
 def fetch_production(
     zone_key: str,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
 ):
     return _fetch(
@@ -390,10 +406,10 @@ def fetch_production(
 @refetch_frequency(timedelta(days=1))
 def fetch_consumption(
     zone_key: ZoneKey,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     consumption_list = TotalConsumptionList(logger)
     consumption = _fetch(
         zone_key,
@@ -416,8 +432,8 @@ def fetch_consumption(
 @refetch_frequency(timedelta(days=1))
 def fetch_consumption_forecast(
     zone_key: ZoneKey,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
 ):
     consumptions = TotalConsumptionList(logger)
@@ -440,8 +456,8 @@ def fetch_consumption_forecast(
 
 
 def create_production_storage(
-    fuel_type: str, production_point: Dict[str, float], negative_threshold: float
-) -> Tuple[Optional[ProductionMix], Optional[StorageMix]]:
+    fuel_type: str, production_point: dict[str, float], negative_threshold: float
+) -> tuple[ProductionMix | None, StorageMix | None]:
     """Create a production mix or a storage mix from a production point
     handling the special cases of hydro storage and self consumption"""
     production_value = production_point["value"]
@@ -463,11 +479,12 @@ def create_production_storage(
 @refetch_frequency(timedelta(days=1))
 def fetch_production_mix(
     zone_key: ZoneKey,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
 ):
-    all_production_breakdowns: List[ProductionBreakdownList] = []
+    all_production_breakdowns: list[ProductionBreakdownList] = []
+    # TODO: We could be smarter in the future and only fetch the expected production types.
     for production_mode, code in TYPES.items():
         negative_threshold = NEGATIVE_PRODUCTION_THRESHOLDS_TYPE.get(
             production_mode, NEGATIVE_PRODUCTION_THRESHOLDS_TYPE["default"]
@@ -502,7 +519,6 @@ def fetch_production_mix(
         if zone_key == "US-CAR-SCEG" and production_mode == "nuclear":
             for point in production_values:
                 point.update({"value": point["value"] * (1 - SC_VIRGIL_OWNERSHIP)})
-
         for point in production_values:
             production_mix, storage_mix = create_production_storage(
                 production_mode, point, negative_threshold
@@ -566,7 +582,7 @@ def fetch_production_mix(
     # Fx the latest oil data could be 6 months old.
     # In this case we want to discard the old data as we won't be able to merge it
     timeframes = [
-        sorted(map(lambda x: x.datetime, breakdowns.events))
+        sorted(x.datetime for x in breakdowns.events)
         for breakdowns in all_production_breakdowns
         if len(breakdowns.events) > 0
     ]
@@ -578,19 +594,24 @@ def fetch_production_mix(
             if production_mix.datetime in latest_timeframe:
                 correct_mix.append(production_mix)
         production_list.events = correct_mix
-    return ProductionBreakdownList.merge_production_breakdowns(
+    events = ProductionBreakdownList.merge_production_breakdowns(
         all_production_breakdowns, logger
-    ).to_list()
+    )
+    if zone_key in FILTER_INCOMPLETE_DATA_BYPASSED_MODES:
+        events = ProductionBreakdownList.filter_expected_modes(
+            events, by_passed_modes=FILTER_INCOMPLETE_DATA_BYPASSED_MODES[zone_key]
+        )
+    return events.to_list()
 
 
 @refetch_frequency(timedelta(days=1))
 def fetch_exchange(
     zone_key1: ZoneKey,
     zone_key2: ZoneKey,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     sortedcodes = "->".join(sorted([zone_key1, zone_key2]))
     exchange_list = ExchangeList(logger)
     exchange = _fetch(
@@ -641,27 +662,32 @@ def fetch_exchange(
 def _fetch(
     zone_key: str,
     url_prefix: str,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
 ):
     # get EIA API key
     API_KEY = get_token("EIA_KEY")
 
+    start, end = None, None
     if target_datetime:
         try:
             target_datetime = arrow.get(target_datetime).datetime
-        except arrow.parser.ParserError:
+        except arrow.parser.ParserError as e:
             raise ValueError(
                 f"target_datetime must be a valid datetime - received {target_datetime}"
-            )
+            ) from e
         utc = tz.gettz("UTC")
-        eia_ts_format = "%Y-%m-%dT%H"
         end = target_datetime.astimezone(utc) + timedelta(hours=1)
         start = end - timedelta(days=1)
-        url = f"{url_prefix}&api_key={API_KEY}&start={start.strftime(eia_ts_format)}&end={end.strftime(eia_ts_format)}"
     else:
-        url = f"{url_prefix}&api_key={API_KEY}&sort[0][column]=period&sort[0][direction]=desc&length=24"
+        end = datetime.now(tz=tz.gettz("UTC")).replace(
+            minute=0, second=0, microsecond=0
+        ) + timedelta(hours=1)
+        start = end - timedelta(hours=72)
+
+    eia_ts_format = "%Y-%m-%dT%H"
+    url = f"{url_prefix}&api_key={API_KEY}&start={start.strftime(eia_ts_format)}&end={end.strftime(eia_ts_format)}"
 
     s = session or Session()
     req = s.get(url)
@@ -674,7 +700,7 @@ def _fetch(
             "datetime": _get_utc_datetime_from_datapoint(
                 parser.parse(datapoint["period"])
             ),
-            "value": datapoint["value"],
+            "value": float(datapoint["value"]) if datapoint["value"] else None,
             "source": "eia.gov",
         }
         for datapoint in raw_data["response"]["data"]

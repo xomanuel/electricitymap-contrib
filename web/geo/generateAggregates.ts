@@ -1,12 +1,12 @@
 import { Feature, MultiPolygon, union } from '@turf/turf';
-import { ZonesConfig, WorldFeatureCollection, FeatureProperties } from './types';
+
+import { FeatureProperties, OptimizedZonesConfig, WorldFeatureCollection } from './types';
 
 const emptyFeature: Feature<MultiPolygon, FeatureProperties> = {
   type: 'Feature',
   properties: {
     zoneName: '',
     countryKey: '',
-    countryName: '',
     isHighestGranularity: false,
     isAggregatedView: true,
     isCombined: true,
@@ -14,7 +14,7 @@ const emptyFeature: Feature<MultiPolygon, FeatureProperties> = {
   geometry: { type: 'MultiPolygon', coordinates: [] },
 };
 
-const generateAggregates = (fc: WorldFeatureCollection, zones: ZonesConfig) => {
+const generateAggregates = (fc: WorldFeatureCollection, zones: OptimizedZonesConfig) => {
   const skippedZones: string[] = []; // Holds skipped subZones that are not in the geojson
   const { features } = fc;
 
@@ -56,7 +56,6 @@ const generateAggregates = (fc: WorldFeatureCollection, zones: ZonesConfig) => {
           ...emptyFeature.properties,
           countryKey: multiZoneCountry?.properties.countryKey || '',
           zoneName: multiZoneCountry?.properties.countryKey || '',
-          countryName: multiZoneCountry?.properties.countryName || '',
         },
       };
 
@@ -86,8 +85,11 @@ const generateAggregates = (fc: WorldFeatureCollection, zones: ZonesConfig) => {
     })
     .filter((zone) => zone !== null);
 
-  if (skippedZones.length > 0) {
-    for (const zone of skippedZones) {
+  const skippedZonesWithConsumption = skippedZones.filter(
+    (z) => !zones[z].generation_only
+  );
+  if (skippedZonesWithConsumption.length > 0) {
+    for (const zone of skippedZonesWithConsumption) {
       console.error(
         `ERROR: Could not find geometry feature for ${zone}, make sure it has geometry in world.geojson.`
       );

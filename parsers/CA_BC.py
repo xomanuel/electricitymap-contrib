@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 
-# The arrow library is used to handle datetimes
 from datetime import datetime, timedelta
 from logging import Logger, getLogger
-from typing import Any, Dict, List, Optional
+from typing import Any
+from zoneinfo import ZoneInfo
 
-import arrow
 import pandas as pd
-import pytz
 from requests import Response, Session
 
 from electricitymap.contrib.config import ZONES_CONFIG
@@ -24,7 +22,7 @@ from parsers.lib.exceptions import ParserException
 
 HISTORICAL_LOAD_REPORTS = "https://www.bchydro.com/content/dam/BCHydro/customer-portal/documents/corporate/suppliers/transmission-system/balancing_authority_load_data/Historical%20Transmission%20Data/BalancingAuthorityLoad{0}.xls"
 EXCHANGES_URL = "https://www.bchydro.com/bctc/system_cms/actual_flow/latest_values.txt"
-TIMEZONE = pytz.timezone(ZONES_CONFIG.get(ZoneKey("CA-BC")).get("timezone"))
+TIMEZONE = ZoneInfo(ZONES_CONFIG.get(ZoneKey("CA-BC"), {}).get("timezone"))
 SOURCE = "bchydro.com"
 PUBLICATION_DELAY = timedelta(days=31)
 
@@ -37,8 +35,8 @@ EXCHANGE_POSITION_MULTIPLIER = {
 @refetch_frequency(timedelta(days=1))
 def fetch_consumption(
     zone_key: ZoneKey,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
 ):
     r = session or Session()
@@ -56,7 +54,7 @@ def fetch_consumption(
         if not response.ok:
             raise ParserException(
                 "CA_BC.py",
-                "Could not fetch load report for year {0}".format(year),
+                f"Could not fetch load report for year {year}",
                 zone_key,
             )
         df = pd.read_excel(response.content, skiprows=3)
@@ -82,10 +80,10 @@ def fetch_consumption(
 def fetch_exchange(
     zone_key1: str,
     zone_key2: str,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Requests the last known power exchange (in MW) between two countries."""
     if target_datetime:
         raise NotImplementedError("This parser is not yet able to parse past dates")
@@ -94,9 +92,9 @@ def fetch_exchange(
     response = r.get(EXCHANGES_URL)
     obj = response.text.split("\r\n")[1].replace("\r", "").split(",")
 
-    datetime = arrow.get(
-        arrow.get(obj[0], "DD-MMM-YY HH:mm:ss").datetime, TIMEZONE
-    ).datetime
+    parsed_datetime = datetime.strptime(obj[0], "%d-%b-%y %H:%M:%S").replace(
+        tzinfo=TIMEZONE
+    )
 
     sortedZoneKeys = ZoneKey("->".join(sorted([zone_key1, zone_key2])))
     if sortedZoneKeys not in EXCHANGE_POSITION_MULTIPLIER:
@@ -106,7 +104,7 @@ def fetch_exchange(
     exchanges = ExchangeList(logger)
     exchanges.append(
         sortedZoneKeys,
-        datetime,
+        parsed_datetime,
         SOURCE,
         float(obj[position]) * multiplier,
     )

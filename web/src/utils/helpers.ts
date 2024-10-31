@@ -1,27 +1,35 @@
+import { callerLocation, useMeta } from 'api/getMeta';
+import { useMatch, useParams } from 'react-router-dom';
 import {
   ElectricityModeType,
   ElectricityStorageKeyType,
   GenerationType,
+  StateZoneData,
   ZoneDetail,
 } from 'types';
-import { useParams, useMatch } from 'react-router-dom';
 
-export function getZoneFromPath() {
+import zonesConfigJSON from '../../config/zones.json';
+import { CombinedZonesConfig } from '../../geo/types';
+
+export function useGetZoneFromPath() {
   const { zoneId } = useParams();
+  const match = useMatch('/zone/:id');
   if (zoneId) {
     return zoneId;
   }
-  const match = useMatch('/zone/:id');
   return match?.params.id || undefined;
 }
 
-export function getCO2IntensityByMode(
-  zoneData: { co2intensity: number; co2intensityProduction: number },
-  electricityMixMode: string
-) {
-  return electricityMixMode === 'consumption'
-    ? zoneData.co2intensity
-    : zoneData.co2intensityProduction;
+export function useUserLocation(): callerLocation {
+  const { callerLocation } = useMeta();
+  if (
+    callerLocation &&
+    callerLocation.length === 2 &&
+    callerLocation.every((x) => Number.isFinite(x))
+  ) {
+    return callerLocation;
+  }
+  return null;
 }
 
 /**
@@ -56,8 +64,9 @@ export function getProductionCo2Intensity(
  * Returns a link which maintains search and hash parameters
  * @param to
  */
-export function createToWithState(to: string) {
-  return `${to}${location.search}${location.hash}`;
+
+export function createToWithState(to: string, includeHash: boolean = false) {
+  return `${to}${location.search}${includeHash ? location.hash : ''}`;
 }
 
 /**
@@ -67,13 +76,10 @@ export function createToWithState(to: string) {
  * @param fossilFuelRatioProduction - The fossil fuel ratio for production
  */
 export function getFossilFuelRatio(
-  isConsumption: boolean,
-  fossilFuelRatio: number | null | undefined,
-  fossilFuelRatioProduction: number | null | undefined
+  zoneData: StateZoneData,
+  isConsumption: boolean
 ): number {
-  const fossilFuelRatioToUse = isConsumption
-    ? fossilFuelRatio
-    : fossilFuelRatioProduction;
+  const fossilFuelRatioToUse = isConsumption ? zoneData?.c?.fr : zoneData?.p?.fr;
   switch (fossilFuelRatioToUse) {
     case 0: {
       return 1;
@@ -97,27 +103,20 @@ export function getFossilFuelRatio(
  * @param co2intensity - The carbon intensity for consumption
  * @param co2intensityProduction - The carbon intensity for production
  */
-export function getCarbonIntensity(
-  isConsumption: boolean,
-  co2intensity: number | null | undefined,
-  co2intensityProduction: number | null | undefined
-): number {
-  return (isConsumption ? co2intensity : co2intensityProduction) ?? Number.NaN;
-}
+export const getCarbonIntensity = (
+  zoneData: StateZoneData,
+  isConsumption: boolean
+): number => (isConsumption ? zoneData?.c?.ci : zoneData?.p?.ci) ?? Number.NaN;
 
 /**
  * Returns the renewable ratio of a zone
+ * @param zoneData - The zone data
  * @param isConsumption - Whether the ratio is for consumption or production
- * @param renewableRatio - The renewable ratio for consumption
- * @param renewableRatioProduction - The renewable ratio for production
  */
-export function getRenewableRatio(
-  isConsumption: boolean,
-  renewableRatio: number | null | undefined,
-  renewableRatioProduction: number | null | undefined
-): number {
-  return (isConsumption ? renewableRatio : renewableRatioProduction) ?? Number.NaN;
-}
+export const getRenewableRatio = (
+  zoneData: StateZoneData,
+  isConsumption: boolean
+): number => (isConsumption ? zoneData?.c?.rr : zoneData?.p?.rr) ?? Number.NaN;
 
 /**
  * Function to round a number to a specific amount of decimals.
@@ -125,12 +124,9 @@ export function getRenewableRatio(
  * @param {number} decimals - Defaults to 2 decimals.
  * @returns {number} Rounded number.
  */
-export const round = (number: number, decimals = 2): number => {
-  return (
-    (Math.round((Math.abs(number) + Number.EPSILON) * 10 ** decimals) / 10 ** decimals) *
-    Math.sign(number)
-  );
-};
+export const round = (number: number, decimals = 2): number =>
+  (Math.round((Math.abs(number) + Number.EPSILON) * 10 ** decimals) / 10 ** decimals) *
+  Math.sign(number);
 
 /**
  * Returns the net exchange of a zone
@@ -144,7 +140,41 @@ export function getNetExchange(
   if (Object.keys(zoneData.exchange).length === 0) {
     return Number.NaN;
   }
-  return displayByEmissions
-    ? round(zoneData.totalCo2NetExchange) // in tCO₂eq/min
-    : round(zoneData.totalImport - zoneData.totalExport);
+
+  if (
+    !displayByEmissions &&
+    zoneData.totalImport === null &&
+    zoneData.totalExport === null
+  ) {
+    return Number.NaN;
+  }
+  if (
+    displayByEmissions &&
+    zoneData.totalCo2Import == null &&
+    zoneData.totalCo2Export == null
+  ) {
+    return Number.NaN;
+  }
+
+  const netExchangeValue = displayByEmissions
+    ? round((zoneData.totalCo2Import ?? 0) - (zoneData.totalCo2Export ?? 0)) // in CO₂eq
+    : round((zoneData.totalImport ?? 0) - (zoneData.totalExport ?? 0));
+
+  return netExchangeValue;
 }
+
+export const getZoneTimezone = (zoneId?: string) => {
+  if (!zoneId) {
+    return undefined;
+  }
+  const { zones } = zonesConfigJSON as unknown as CombinedZonesConfig;
+  return zones[zoneId]?.timezone;
+};
+
+/**
+ * @returns {Boolean} true if agent is probably a mobile device.
+ */
+export const hasMobileUserAgent = () =>
+  /android|blackberry|iemobile|ipad|iphone|ipod|opera mini|webos/i.test(
+    navigator.userAgent
+  );

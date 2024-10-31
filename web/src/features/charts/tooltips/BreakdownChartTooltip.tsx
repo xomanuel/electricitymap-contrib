@@ -2,17 +2,20 @@ import { CarbonIntensityDisplay } from 'components/CarbonIntensityDisplay';
 import { CountryFlag } from 'components/Flag';
 import { MetricRatio } from 'components/MetricRatio';
 import { useCo2ColorScale } from 'hooks/theme';
-import { useAtom } from 'jotai';
-import { renderToString } from 'react-dom/server';
-import { getZoneName, useTranslation } from 'translation/translation';
+import { TFunction } from 'i18next';
+import { useAtomValue } from 'jotai';
+import { useTranslation } from 'react-i18next';
+import { getZoneName } from 'translation/translation';
 import { ElectricityModeType, Maybe, ZoneDetail } from 'types';
-import { Mode, TimeAverages, modeColor } from 'utils/constants';
-import { formatCo2, formatPower } from 'utils/formatting';
+import { EstimationMethods, modeColor, TimeAverages } from 'utils/constants';
+import { formatCo2, formatEnergy, formatPower } from 'utils/formatting';
 import {
   displayByEmissionsAtom,
-  productionConsumptionAtom,
+  isConsumptionAtom,
+  isHourlyAtom,
   timeAverageAtom,
 } from 'utils/state/atoms';
+
 import { getGenerationTypeKey, getRatioPercent } from '../graphUtils';
 import { getExchangeTooltipData, getProductionTooltipData } from '../tooltipCalculations';
 import { InnerAreaGraphTooltipProps, LayerKey } from '../types';
@@ -22,7 +25,7 @@ function calculateTooltipContentData(
   selectedLayerKey: LayerKey,
   zoneDetail: ZoneDetail,
   displayByEmissions: boolean,
-  mixMode: Mode
+  isConsumption: boolean
 ) {
   // If layer key is not a generation type, it is an exchange
   const isExchange = !getGenerationTypeKey(selectedLayerKey);
@@ -33,17 +36,78 @@ function calculateTooltipContentData(
         selectedLayerKey as ElectricityModeType,
         zoneDetail,
         displayByEmissions,
-        mixMode
+        isConsumption
       );
+}
+
+function Headline({
+  isExchange,
+  displayByEmissions,
+  zoneKey,
+  selectedLayerKey,
+  percentageUsage,
+  t,
+  isExport,
+}: {
+  isExchange: boolean;
+  displayByEmissions: boolean;
+  zoneKey: string;
+  selectedLayerKey: LayerKey;
+  percentageUsage: string;
+  t: TFunction;
+  isExport: boolean;
+}) {
+  const availabilityKey = displayByEmissions
+    ? 'emissionsAvailableIn'
+    : 'electricityAvailableIn';
+
+  const dataActionKey = getDataActionKey(isExchange, isExport, displayByEmissions);
+
+  return (
+    <div>
+      <b>{percentageUsage} %</b> {t(availabilityKey)}
+      <span className="mx-1 inline-flex">
+        <CountryFlag className="shadow-3xl" zoneId={zoneKey} />
+      </span>
+      <b>{getZoneName(zoneKey)}</b> {t(dataActionKey)}
+      {!isExchange && ` ${t(selectedLayerKey)}`}
+      {isExchange && (
+        <>
+          <span className="mx-1 inline-flex">
+            <CountryFlag className="shadow-3xl" zoneId={selectedLayerKey} />
+          </span>
+          <b>{getZoneName(selectedLayerKey)}</b>
+        </>
+      )}
+    </div>
+  );
+}
+
+function getDataActionKey(
+  isExchange: boolean,
+  isExport: boolean,
+  displayByEmissions: boolean
+) {
+  if (isExchange) {
+    if (isExport) {
+      return displayByEmissions ? 'emissionsExportedTo' : 'electricityExportedTo';
+    }
+    return displayByEmissions ? 'emissionsImportedFrom' : 'electricityImportedFrom';
+  } else {
+    if (isExport) {
+      return displayByEmissions ? 'emissionsStoredUsing' : 'electricityStoredUsing';
+    }
+    return 'comesFrom';
+  }
 }
 
 export default function BreakdownChartTooltip({
   zoneDetail,
   selectedLayerKey,
 }: InnerAreaGraphTooltipProps) {
-  const [displayByEmissions] = useAtom(displayByEmissionsAtom);
-  const [timeAverage] = useAtom(timeAverageAtom);
-  const [mixMode] = useAtom(productionConsumptionAtom);
+  const displayByEmissions = useAtomValue(displayByEmissionsAtom);
+  const timeAverage = useAtomValue(timeAverageAtom);
+  const isConsumption = useAtomValue(isConsumptionAtom);
 
   if (!zoneDetail || !selectedLayerKey) {
     return null;
@@ -56,33 +120,22 @@ export default function BreakdownChartTooltip({
     selectedLayerKey,
     zoneDetail,
     displayByEmissions,
-    mixMode
+    isConsumption
   );
 
-  const getOriginTranslateKey = () => {
-    if (isExchange) {
-      if (contentData.isExport) {
-        return displayByEmissions ? 'emissionsExportedTo' : 'electricityExportedTo';
-      } else {
-        return displayByEmissions ? 'emissionsImportedFrom' : 'electricityImportedFrom';
-      }
-    } else {
-      if (contentData.isExport) {
-        return displayByEmissions ? 'emissionsStoredUsing' : 'electricityStoredUsing';
-      } else {
-        return displayByEmissions ? 'emissionsComeFrom' : 'electricityComesFrom';
-      }
-    }
-  };
+  const { estimationMethod, stateDatetime, estimatedPercentage } = zoneDetail;
+  const hasEstimationPill = estimationMethod != undefined || Boolean(estimatedPercentage);
 
   return (
     <BreakdownChartTooltipContent
       {...contentData}
-      datetime={new Date(zoneDetail.stateDatetime)}
+      datetime={new Date(stateDatetime)}
       isExchange={isExchange}
       selectedLayerKey={selectedLayerKey}
-      originTranslateKey={getOriginTranslateKey()}
       timeAverage={timeAverage}
+      hasEstimationPill={hasEstimationPill}
+      estimatedPercentage={estimatedPercentage}
+      estimationMethod={estimationMethod}
     ></BreakdownChartTooltipContent>
   );
 }
@@ -90,7 +143,7 @@ export default function BreakdownChartTooltip({
 interface BreakdownChartTooltipContentProperties {
   datetime: Date;
   usage: number;
-  capacity: Maybe<number>;
+  capacity: number | null | undefined;
   totalElectricity: number;
   totalEmissions: number;
   co2Intensity: number;
@@ -98,12 +151,16 @@ interface BreakdownChartTooltipContentProperties {
   displayByEmissions: boolean;
   emissions: number;
   zoneKey: string;
-  originTranslateKey: string;
   isExchange: boolean;
+  isExport: boolean;
   selectedLayerKey: LayerKey;
   co2IntensitySource?: string;
   storage?: Maybe<number>;
   production?: Maybe<number>;
+  hasEstimationPill?: boolean;
+  estimatedPercentage?: number;
+  capacitySource?: string[] | null;
+  estimationMethod?: EstimationMethods;
 }
 
 export function BreakdownChartTooltipContent({
@@ -114,36 +171,29 @@ export function BreakdownChartTooltipContent({
   timeAverage,
   capacity,
   emissions,
+  isExport,
   totalEmissions,
   co2Intensity,
   co2IntensitySource,
   zoneKey,
-  originTranslateKey,
   isExchange,
   selectedLayerKey,
+  hasEstimationPill,
+  estimatedPercentage,
+  capacitySource,
+  estimationMethod,
 }: BreakdownChartTooltipContentProperties) {
-  const { __ } = useTranslation();
+  const { t } = useTranslation();
   const co2ColorScale = useCo2ColorScale();
+  const isHourly = useAtomValue(isHourlyAtom);
   // Dynamically generate the translated headline HTML based on the exchange or generation type
-  const headline = isExchange
-    ? __(
-        originTranslateKey,
-        getRatioPercent(usage, totalElectricity).toString(),
-        getZoneName(zoneKey),
-        getZoneName(selectedLayerKey),
-        renderToString(<CountryFlag className="shadow-3xl" zoneId={zoneKey} />),
-        renderToString(<CountryFlag className="shadow-3xl" zoneId={selectedLayerKey} />)
-      ) // Eg: "7 % of electricity in Denmark is imported from Germany"
-    : __(
-        originTranslateKey,
-        getRatioPercent(usage, totalElectricity).toString(),
-        getZoneName(zoneKey),
-        __(selectedLayerKey),
-        renderToString(<CountryFlag className="shadow-3xl" zoneId={zoneKey} />)
-      ); // Eg: "20 % of electricity in Denmark comes from biomass"
+  const percentageUsage = displayByEmissions
+    ? getRatioPercent(emissions, totalEmissions)
+    : getRatioPercent(usage, totalElectricity);
+
   const title = isExchange
     ? getZoneName(selectedLayerKey)
-    : __(selectedLayerKey).charAt(0).toUpperCase() + __(selectedLayerKey).slice(1);
+    : t(selectedLayerKey).charAt(0).toUpperCase() + t(selectedLayerKey).slice(1);
   return (
     <div className="w-full rounded-md bg-white p-3 text-sm shadow-3xl dark:border dark:border-gray-700 dark:bg-gray-800 sm:w-[410px]">
       <AreaGraphToolTipHeader
@@ -155,55 +205,80 @@ export function BreakdownChartTooltipContent({
         datetime={datetime}
         timeAverage={timeAverage}
         title={title}
+        hasEstimationPill={isExchange ? false : hasEstimationPill}
+        estimatedPercentage={estimatedPercentage}
+        productionSource={isExchange ? undefined : selectedLayerKey}
+        estimationMethod={estimationMethod}
       />
-      <div
-        className="inline-flex flex-wrap items-center gap-x-1"
-        dangerouslySetInnerHTML={{ __html: headline }}
+      <Headline
+        isExchange={isExchange}
+        displayByEmissions={displayByEmissions}
+        percentageUsage={percentageUsage.toString()}
+        zoneKey={zoneKey}
+        selectedLayerKey={selectedLayerKey}
+        t={t}
+        isExport={isExport}
       />
-      <br />
       {displayByEmissions && (
         <MetricRatio
           value={emissions}
           total={totalEmissions}
           format={formatCo2}
-          label={__('ofCO2eqPerMinute')}
+          label={t('ofCO2eq')}
           useTotalUnit
         />
       )}
 
       {!displayByEmissions && (
-        <>
-          <MetricRatio value={usage} total={totalElectricity} format={formatPower} />
+        // Used to prevent browser translation crashes on edge, see #6809
+        <div translate="no">
+          <MetricRatio
+            value={usage}
+            total={totalElectricity}
+            useTotalUnit
+            format={isHourly ? formatPower : formatEnergy}
+          />
           <br />
-          {timeAverage === TimeAverages.HOURLY && (
+          {isHourly && (
             <>
               <br />
-              {__('tooltips.utilizing')} <b>{getRatioPercent(usage, capacity)} %</b>{' '}
-              {__('tooltips.ofinstalled')}
+              {t('tooltips.utilizing')} <b>{getRatioPercent(usage, capacity)} %</b>{' '}
+              {t('tooltips.ofinstalled')}
               <br />
-              <MetricRatio value={usage} total={(capacity ??= 0)} format={formatPower} />
+              <MetricRatio
+                value={usage}
+                total={capacity}
+                useTotalUnit
+                format={formatPower}
+              />
+              {capacitySource && (
+                <small>
+                  {' '}
+                  ({t('country-panel.source')}: {capacitySource})
+                </small>
+              )}
               <br />
             </>
           )}
           <br />
-          {__('tooltips.representing')}{' '}
+          {t('tooltips.representing')}{' '}
           <b>{getRatioPercent(emissions, totalEmissions)} %</b>{' '}
-          {__('tooltips.ofemissions')}
+          {t('tooltips.ofemissions')}
           <br />
           <MetricRatio
             value={emissions}
             total={totalEmissions}
             format={formatCo2}
-            label={__('ofCO2eqPerMinute')}
+            label={t('ofCO2eq')}
             useTotalUnit
           />
-        </>
+        </div>
       )}
       {!displayByEmissions && (Number.isFinite(co2Intensity) || usage !== 0) && (
         <>
           <br />
           <br />
-          {__('tooltips.withcarbonintensity')}
+          {t('tooltips.withcarbonintensity')}
           <br />
           <div className="flex-wrap">
             <div className="inline-flex items-center gap-x-1">
@@ -212,7 +287,7 @@ export function BreakdownChartTooltipContent({
             {!isExchange && (
               <small>
                 {' '}
-                ({'Source'}: {co2IntensitySource || '?'})
+                ({t('country-panel.source')}: {co2IntensitySource || '?'})
               </small>
             )}
           </div>

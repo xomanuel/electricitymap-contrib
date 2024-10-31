@@ -8,12 +8,12 @@
 import csv
 import re
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging import Logger, getLogger
-from typing import Any, Dict, List, Optional
+from typing import Any
+from zoneinfo import ZoneInfo
 
 # Third-party library imports
-import arrow
 from requests import Session
 
 from electricitymap.contrib.lib.models.event_lists import ExchangeList, PriceList
@@ -24,7 +24,7 @@ from parsers.lib import validation
 
 DEFAULT_ZONE_KEY = ZoneKey("CA-AB")
 MINIMUM_PRODUCTION_THRESHOLD = 10  # MW
-TIMEZONE = "Canada/Mountain"
+TIMEZONE = ZoneInfo("Canada/Mountain")
 URL = urllib.parse.urlsplit("http://ets.aeso.ca/ets_web/ip/Market/Reports")
 URL_STRING = urllib.parse.urlunsplit(URL)
 
@@ -32,10 +32,10 @@ URL_STRING = urllib.parse.urlunsplit(URL)
 def fetch_exchange(
     zone_key1: str = DEFAULT_ZONE_KEY,
     zone_key2: str = "CA-BC",
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Request the last known power exchange (in MW) between two countries."""
     if target_datetime:
         raise NotImplementedError("Currently unable to scrape historical data")
@@ -65,10 +65,10 @@ def fetch_exchange(
 
 def fetch_price(
     zone_key: ZoneKey = DEFAULT_ZONE_KEY,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Request the last known power price of a given country."""
     if target_datetime:
         raise NotImplementedError("Currently unable to scrape historical data")
@@ -79,9 +79,13 @@ def fetch_price(
     prices = PriceList(logger)
     for row in csv.reader(response.text.split("\r\n\r\n")[2].splitlines()[1:]):
         if row[1] != "-":
+            date, hour = row[0].split()
             prices.append(
                 zoneKey=zone_key,
-                datetime=arrow.get(row[0], "MM/DD/YYYY HH", tzinfo=TIMEZONE).datetime,
+                datetime=datetime.strptime(
+                    f"{date} {int(hour) - 1}", "%m/%d/%Y %H"
+                ).replace(tzinfo=TIMEZONE)
+                + timedelta(hours=1),
                 price=float(row[1]),
                 source=URL.netloc,
                 currency="CAD",
@@ -91,10 +95,10 @@ def fetch_price(
 
 def fetch_production(
     zone_key: str = DEFAULT_ZONE_KEY,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> Dict[str, Any]:
+) -> dict[str, Any] | None:
     """Request the last known production mix (in MW) of a given country."""
     if target_datetime:
         raise NotImplementedError("This parser is not yet able to parse past dates")
@@ -145,11 +149,9 @@ def fetch_production(
 
 def get_csd_report_timestamp(report):
     """Get the timestamp from a current supply/demand (CSD) report."""
-    return arrow.get(
-        re.search(r'"Last Update : (.*)"', report).group(1),
-        "MMM DD, YYYY HH:mm",
-        tzinfo=TIMEZONE,
-    ).datetime
+    return datetime.strptime(
+        re.search(r'"Last Update : (.*)"', report).group(1), "%b %d, %Y %H:%M"
+    ).replace(tzinfo=TIMEZONE)
 
 
 if __name__ == "__main__":

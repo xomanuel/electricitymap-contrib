@@ -2,24 +2,29 @@ import useGetZone from 'api/getZone';
 import { max as d3Max } from 'd3-array';
 import type { ScaleLinear } from 'd3-scale';
 import { useCo2ColorScale } from 'hooks/theme';
-import { useAtom } from 'jotai';
+import { useAtomValue } from 'jotai';
+import { useParams } from 'react-router-dom';
 import {
   ElectricityModeType,
   ElectricityStorageKeyType,
   ElectricityStorageType,
   ZoneDetail,
 } from 'types';
-
-import { useParams } from 'react-router-dom';
-import { Mode, SpatialAggregate, modeColor, modeOrder } from 'utils/constants';
+import { modeColor, modeOrder, SpatialAggregate, TimeAverages } from 'utils/constants';
 import { scalePower } from 'utils/formatting';
 import {
   displayByEmissionsAtom,
-  productionConsumptionAtom,
+  isConsumptionAtom,
   spatialAggregateAtom,
+  timeAverageAtom,
 } from 'utils/state/atoms';
+
 import { getExchangesToDisplay } from '../bar-breakdown/utils';
-import { getGenerationTypeKey, getTotalElectricity } from '../graphUtils';
+import {
+  getGenerationTypeKey,
+  getTotalElectricityAvailable,
+  getTotalEmissionsAvailable,
+} from '../graphUtils';
 import { AreaGraphElement, LayerKey } from '../types';
 
 export const getLayerFill =
@@ -37,9 +42,10 @@ export default function useBreakdownChartData() {
   const { data: zoneData, isLoading, isError } = useGetZone();
   const co2ColorScale = useCo2ColorScale();
   const { zoneId } = useParams();
-  const [mixMode] = useAtom(productionConsumptionAtom);
-  const [displayByEmissions] = useAtom(displayByEmissionsAtom);
-  const [viewMode] = useAtom(spatialAggregateAtom);
+  const isConsumption = useAtomValue(isConsumptionAtom);
+  const displayByEmissions = useAtomValue(displayByEmissionsAtom);
+  const viewMode = useAtomValue(spatialAggregateAtom);
+  const timeAggregate = useAtomValue(timeAverageAtom);
   const isCountryView = viewMode === SpatialAggregate.COUNTRY;
   if (isLoading || isError || !zoneData || !zoneId) {
     return { isLoading, isError };
@@ -53,7 +59,8 @@ export default function useBreakdownChartData() {
 
   const { valueFactor, valueAxisLabel } = getValuesInfo(
     Object.values(zoneData.zoneStates),
-    displayByEmissions
+    displayByEmissions,
+    timeAggregate
   );
 
   const chartData: AreaGraphElement[] = [];
@@ -81,7 +88,7 @@ export default function useBreakdownChartData() {
         : getGenerationValue(mode, value, valueFactor, displayByEmissions);
     }
 
-    if (mixMode === Mode.CONSUMPTION) {
+    if (isConsumption) {
       // Add exchanges
       for (const [key, exchangeValue] of Object.entries(value.exchange)) {
         // in GW or MW
@@ -116,7 +123,11 @@ export default function useBreakdownChartData() {
     layerStroke: undefined,
   };
 
-  return { data: result, mixMode, isLoading, isError };
+  return {
+    data: result,
+    isLoading,
+    isError,
+  };
 }
 
 function getStorageValue(
@@ -161,20 +172,26 @@ function getGenerationValue(
 }
 
 interface ValuesInfo {
-  valueAxisLabel: string; // For example, GW or tCO₂eq/min
+  valueAxisLabel: string; // For example, GW or CO₂eq
   valueFactor: number;
 }
 
 function getValuesInfo(
   historyData: ZoneDetail[],
-  displayByEmissions: boolean
+  displayByEmissions: boolean,
+  timeAggregate: string
 ): ValuesInfo {
   const maxTotalValue = d3Max(historyData, (d: ZoneDetail) =>
-    getTotalElectricity(d, displayByEmissions, Mode.CONSUMPTION)
+    displayByEmissions
+      ? getTotalEmissionsAvailable(d, true)
+      : getTotalElectricityAvailable(d, true)
   );
-
-  const format = scalePower(maxTotalValue);
-  const valueAxisLabel = displayByEmissions ? 'CO₂eq / min' : format.unit;
+  const isHourly = timeAggregate === TimeAverages.HOURLY;
+  const format = displayByEmissions
+    ? // Value factor of 1000 to convert from MW to KW
+      { formattingFactor: 1000, unit: 'CO₂eq' }
+    : scalePower(maxTotalValue, isHourly);
+  const valueAxisLabel = format.unit;
   const valueFactor = format.formattingFactor;
   return { valueAxisLabel, valueFactor };
 }

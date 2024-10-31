@@ -16,9 +16,9 @@ const GraphHoverLine = React.memo(
     selectedTimeIndex,
     svgNode,
   }: any) => {
-    const layer = layers && layers[selectedLayerIndex];
-    const fill = layer && layer.markerFill;
-    const datapoint = layer && layer.datapoints && layer.datapoints[selectedTimeIndex];
+    const layer = layers?.[selectedLayerIndex];
+    const fill = layer?.markerFill;
+    const datapoint = layer?.datapoints?.[selectedTimeIndex];
     const nextDateTime = datetimes
       ? datetimes[selectedTimeIndex + 1] ?? endTime
       : undefined;
@@ -26,10 +26,7 @@ const GraphHoverLine = React.memo(
       nextDateTime && datetimes[selectedTimeIndex]
         ? timeScale(nextDateTime) - timeScale(datetimes[selectedTimeIndex])
         : undefined;
-    let x =
-      datetimes &&
-      datetimes[selectedTimeIndex] &&
-      timeScale(datetimes[selectedTimeIndex]);
+    let x = datetimes?.[selectedTimeIndex] && timeScale(datetimes[selectedTimeIndex]);
     if (interval) {
       x += 0.5 * interval;
     }
@@ -41,7 +38,6 @@ const GraphHoverLine = React.memo(
 
     const showVerticalLine = Number.isFinite(x);
     const showMarker = Number.isFinite(x) && Number.isFinite(y);
-
     // Marker callbacks
     useEffect(() => {
       if (showMarker) {
@@ -94,7 +90,7 @@ const GraphHoverLine = React.memo(
             style={{
               display: 'block',
               pointerEvents: 'none',
-              shapeRendering: 'crispEdges',
+              shapeRendering: 'geometricPrecision',
               stroke: 'black',
               strokeWidth: 1.5,
               fill: typeof fill === 'function' ? fill(datapoint) : fill,

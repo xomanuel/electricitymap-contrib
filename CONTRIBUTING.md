@@ -40,16 +40,16 @@ There are several ways to help out without coding, these are primarily:
 ## Zone and exchange configurations
 
 Static information about zones and exchanges are located at [config/zones][config zones] and [config/exchanges][config exchanges] respectively.
-The zone configurations hold information such as the installed capacity, which parsers to use, fallback mixes, contributors and other keys that are required by our frontend and internal systems; and while similar the exchange configs hold the the location, capacity, direction and parsers required.
+The zone configurations hold information such as the installed capacity, which parsers to use, fallback mixes, contributors and other keys that are required by our frontend and internal systems; and while similar the exchange configs hold the location, capacity, direction and parsers required.
 
 ## Parser guidelines
 
-To get stated with editing the parsers use the following steps:
+To get started with editing the parsers use the following steps:
 
 1. Run `poetry install -E parsers` to install all needed dependencies.
 2. Use `poetry run test_parser ZONE_KEY` to test any parser changes.
 
-Note: This requires you to have [Python 3.8][python homepage] and [Poetry][poetry homepage] installed, you can see their respective installation guides here:
+Note: This requires you to have [Python 3.10][python homepage] and [Poetry][poetry homepage] installed, you can see their respective installation guides here:
 
 - [Downloading Python][python install guide]
 - [poetry installation][poetry install guide]
@@ -72,7 +72,7 @@ Check the [wiki page][wiki python code formatting] for more details and tips.
 
 ## Front-end guidelines
 
-To get started with editing the fronted use the following steps:
+To get started with editing the frontend use the following steps:
 
 1. Use `cd web` to go into the web directory
 2. Then use `pnpm install` to get all dependencies installed.
@@ -94,7 +94,7 @@ mobileapp
 ├── android
 ├── assets
 ├── icons
-└──ios
+└── ios
 web
 ├── config
 ├── cypress
@@ -114,7 +114,7 @@ web
 
 ### State management
 
-We use [Jotai][jotai homepage] that saves our state in primitive atoms, these live in #TODO: LINK TO ATOM FILE WHEN REWRITE IS MERGED and are then imported in the individual frontend files where it's needed. If you have a need to save the state for a new feature you should add a new atom to this file so we keep everything organized.
+We use [Jotai][jotai homepage] that saves our state in primitive atoms, these live in [web/src/utils/state/atoms.ts][jotai atoms] and are then imported in the individual frontend files where it's needed. If you have a need to save the state for a new feature you should add a new atom to this file so we keep everything organized.
 
 ### Formatting the frontend
 
@@ -136,9 +136,10 @@ Check the [wiki page][wiki js code formatting] on formatting for more details an
 [wiki python code formatting]: https://github.com/electricitymaps/electricitymaps-contrib/wiki/Format-your-code-contribution#python-code-formatting
 [node homepage]: https://nodejs.org/
 [pnpm homepage]: https://pnpm.io/
-[node installation guide]: https://nodejs.dev/en/learn/how-to-install-nodejs/
+[node installation guide]: https://nodejs.org/en/learn/getting-started/how-to-install-nodejs
 [pnpm installation guide]: https://pnpm.io/installation
 [jotai homepage]: https://jotai.org/
+[jotai atoms]: https://github.com/electricitymaps/electricitymaps-contrib/blob/master/web/src/utils/state/atoms.ts
 [eslint homepage]: https://eslint.org/
 [prettier homepage]: https://prettier.io/
 [wiki js code formatting]: https://github.com/electricitymaps/electricitymaps-contrib/wiki/Format-your-code-contribution#js-code-formatting

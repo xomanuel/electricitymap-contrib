@@ -3,10 +3,8 @@
 import sys
 from datetime import datetime
 from logging import Logger, getLogger
-from typing import Any, Dict, List, Optional
-
-# The arrow library is used to handle datetimes
-import arrow
+from typing import Any
+from zoneinfo import ZoneInfo
 
 # BeautifulSoup is used to parse HTML
 from bs4 import BeautifulSoup
@@ -14,6 +12,8 @@ from requests import Session
 
 REALTIME_SOURCE = "https://tsoc.org.cy/electrical-system/total-daily-system-generation-on-the-transmission-system/"
 HISTORICAL_SOURCE = "https://tsoc.org.cy/electrical-system/archive-total-daily-system-generation-on-the-transmission-system/?startdt={}&enddt=%2B1days"
+
+TIMEZONE = ZoneInfo("Asia/Nicosia")
 
 
 class CyprusParser:
@@ -61,10 +61,10 @@ class CyprusParser:
                 "storage": {},
                 "source": "tsoc.org.cy",
             }
-            for col, val in zip(columns, values):
+            for col, val in zip(columns, values, strict=True):
                 if col == "Timestamp":
-                    datum["datetime"] = (
-                        arrow.get(val).replace(tzinfo="Asia/Nicosia").datetime
+                    datum["datetime"] = datetime.fromisoformat(val).replace(
+                        tzinfo=TIMEZONE
                     )
                 elif col == "Αιολική Παραγωγή":
                     production["wind"] = float(val)
@@ -84,14 +84,12 @@ class CyprusParser:
             data.append(datum)
         return data
 
-    def fetch_production(self, target_datetime: Optional[datetime]) -> list:
+    def fetch_production(self, target_datetime: datetime | None) -> list:
         if target_datetime is None:
             url = REALTIME_SOURCE
         else:
             # convert target datetime to local datetime
-            url_date = (
-                arrow.get(target_datetime).to("Asia/Nicosia").format("DD-MM-YYYY")
-            )
+            url_date = target_datetime.astimezone(TIMEZONE).strftime("%d-%m-%Y")
             url = HISTORICAL_SOURCE.format(url_date)
 
         res = self.session.get(url)
@@ -112,10 +110,10 @@ class CyprusParser:
 
 def fetch_production(
     zone_key: str = "CY",
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Requests the last known production mix (in MW) of a given country."""
     assert zone_key == "CY"
 

@@ -1,25 +1,66 @@
-import { FeatureCollection, Feature, MultiPolygon, Polygon } from '@turf/turf';
-import { config } from './generateWorld';
+import { Feature, FeatureCollection, MultiPolygon, Polygon } from '@turf/turf';
 
-export type GeoConfig = typeof config;
+import { GEO_CONFIG } from './generateWorld';
+
+export type GeoConfig = typeof GEO_CONFIG;
 
 export interface ZoneConfig {
+  aggregates_displayed?: string[];
   subZoneNames?: string[];
-  bounding_box: number[][];
-  timezone: string;
-  [key: string]: any;
+  bounding_box?: number[][];
+  contributors?: string[];
+  disclaimer?: string;
+  estimation_method?: string;
+  generation_only?: boolean;
+  parsers?: {
+    consumption?: string;
+    consumptionForecast?: string;
+    generationForecast?: string;
+    price?: string;
+    production?: string;
+    productionPerModeForecast?: string;
+    productionPerUnit?: string;
+  };
+  [key: string]:
+    | undefined
+    | string[]
+    | number[][]
+    | string
+    | boolean
+    | { [key: string]: string };
+}
+
+export interface OptimizedZoneConfig {
+  contributors?: number[];
+  disclaimer?: string;
+  estimation_method?: string;
+  parsers: boolean;
+  subZoneNames?: string[];
+  aggregates_displayed?: string[];
+  generation_only?: boolean;
+  timezone?: string;
 }
 
 export interface ZonesConfig {
   [key: string]: ZoneConfig;
 }
 
+export interface OptimizedZonesConfig {
+  [key: string]: OptimizedZoneConfig;
+}
+
+export interface CombinedZonesConfig {
+  contributors: string[];
+  zones: OptimizedZonesConfig;
+}
+
 export interface ExchangeConfig {
-  capacity?: [number, number];
   lonlat: [number, number];
   rotation: number;
-  [key: string]: any;
+  [key: string]: [number, number] | number;
   // The following properties are removed from the generated exchange config
+  // and are either not used in the app or are provided by the backend instead.
+  // capacity?: [number, number];
   // comment?: string;
   // _comment?: string;
   // parsers?: {
@@ -35,7 +76,6 @@ export interface ExchangesConfig {
 export declare type FeatureProperties = {
   zoneName: string;
   countryKey: string;
-  countryName: string;
   isAggregatedView?: boolean;
   isHighestGranularity?: boolean;
   isCombined?: boolean;

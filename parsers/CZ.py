@@ -1,18 +1,23 @@
 from datetime import datetime, timedelta
 from logging import Logger, getLogger
-from typing import List, Optional
 
 from bs4 import BeautifulSoup
 
 # The request library is used to fetch content through HTTP
 from requests import Response, Session
 
+from electricitymap.contrib.lib.models.event_lists import (
+    ExchangeList,
+    ProductionBreakdownList,
+    ProductionMix,
+    StorageMix,
+)
+from electricitymap.contrib.lib.types import ZoneKey
 from parsers.lib.config import refetch_frequency
 from parsers.lib.exceptions import ParserException
 
 # please try to write PEP8 compliant code (use a linter). One of PEP8's
 # requirement is to limit your line length to 79 characters.
-
 
 translate_table_gen = {
     "TPP": "coal",  # coal
@@ -62,7 +67,7 @@ def make_request(session, payload, zone_key):
     return res
 
 
-def get_target_datetime(dt: Optional[datetime]) -> datetime:
+def get_target_datetime(dt: datetime | None) -> datetime:
     if dt is None:
         now = datetime.now()
         dt = (now - timedelta(minutes=now.minute % 15)).replace(second=0, microsecond=0)
@@ -70,13 +75,13 @@ def get_target_datetime(dt: Optional[datetime]) -> datetime:
 
 
 def __get_exchange_data(
-    zone_key1: str = "CZ",
-    zone_key2: str = "DE",
+    zone_key1: ZoneKey = ZoneKey("CZ"),
+    zone_key2: ZoneKey = ZoneKey("DE"),
     session: Session = Session(),
-    target_datetime: Optional[datetime] = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
     mode: str = "Actual",
-) -> List[dict]:
+) -> list:
     target_datetime = get_target_datetime(target_datetime)
     from_datetime = target_datetime - timedelta(hours=48)
 
@@ -84,11 +89,11 @@ def __get_exchange_data(
     <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
       <soap12:Body>
         <CrossborderPowerFlows xmlns="https://www.ceps.cz/CepsData/">
-          <dateFrom>{0}</dateFrom>
-          <dateTo>{1}</dateTo>
-          <agregation>{2}</agregation>
-          <function>{3}</function>
-          <version>{4}</version>
+          <dateFrom>{}</dateFrom>
+          <dateTo>{}</dateTo>
+          <agregation>{}</agregation>
+          <function>{}</function>
+          <version>{}</version>
         </CrossborderPowerFlows>
       </soap12:Body>
     </soap12:Envelope>""".format(
@@ -100,16 +105,11 @@ def __get_exchange_data(
     mapper = get_mapper(xml)
 
     data_tag = xml.find("data")
-    data_list: List[dict] = []
+    exchanges = ExchangeList(logger)
 
     if data_tag is not None:
         for values in data_tag:
-            data = {
-                "sortedZoneKeys": f"{zone_key1}->{zone_key2}",
-                "datetime": datetime.fromisoformat(values["date"]),
-                "netFlow": 0.0,
-                "source": source,
-            }
+            totalNetFlow = 0.0
 
             for k, v in mapper.items():
                 country = "".join(
@@ -121,9 +121,14 @@ def __get_exchange_data(
                 )
                 if country != "" and country in (zone_key1, zone_key2):
                     netFlow = float(values[v])
-                    data["netFlow"] += -1 * netFlow if zone_key1 == "CZ" else netFlow
+                    totalNetFlow += -1 * netFlow if zone_key1 == "CZ" else netFlow
 
-            data_list.append(data)
+            exchanges.append(
+                zoneKey=ZoneKey(f"{zone_key1}->{zone_key2}"),
+                datetime=datetime.fromisoformat(values["date"]),
+                source=source,
+                netFlow=totalNetFlow,
+            )
 
     else:
         zone_key = f"{zone_key1}->{zone_key2}"
@@ -133,16 +138,16 @@ def __get_exchange_data(
             zone_key,
         )
 
-    return data_list
+    return exchanges.to_list()
 
 
 @refetch_frequency(timedelta(days=2))
 def fetch_production(
-    zone_key: str = "CZ",
+    zone_key: ZoneKey = ZoneKey("CZ"),
     session: Session = Session(),
-    target_datetime: Optional[datetime] = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[dict]:
+) -> list:
     target_datetime = get_target_datetime(target_datetime)
     from_datetime = target_datetime - timedelta(hours=48)
 
@@ -150,12 +155,12 @@ def fetch_production(
             <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
               <soap12:Body>
                 <Generation xmlns="https://www.ceps.cz/CepsData/">
-                  <dateFrom>{0}</dateFrom>
-                  <dateTo>{1}</dateTo>
-                  <agregation>{2}</agregation>
-                  <function>{3}</function>
-                  <version>{4}</version>
-                  <para1>{5}</para1>
+                  <dateFrom>{}</dateFrom>
+                  <dateTo>{}</dateTo>
+                  <agregation>{}</agregation>
+                  <function>{}</function>
+                  <version>{}</version>
+                  <para1>{}</para1>
                 </Generation>
               </soap12:Body>
             </soap12:Envelope>""".format(
@@ -167,26 +172,27 @@ def fetch_production(
     mapper = get_mapper(xml)
 
     data_tag = xml.find("data")
-    data_list = []
+    production_breakdowns = ProductionBreakdownList(logger)
 
     if data_tag is not None:
         for values in data_tag:
-            data = {
-                "zoneKey": zone_key,
-                "production": {},
-                "storage": {},
-                "source": source,
-                "datetime": datetime.fromisoformat(values["date"]),
-            }
+            production = ProductionMix()
+            storage = StorageMix()
 
             for k, v in mapper.items():
                 generator = translate_table_gen[k]
                 if k != "PsPP":
-                    data["production"][generator] = float(values[v])
+                    production.add_value(mode=generator, value=float(values[v]))
                 else:
-                    data["storage"][generator] = float(values[v]) * -1
+                    storage.add_value(mode=generator, value=float(values[v]) * -1)
 
-            data_list.append(data)
+            production_breakdowns.append(
+                zoneKey=zone_key,
+                datetime=datetime.fromisoformat(values["date"]),
+                source=source,
+                production=production,
+                storage=storage,
+            )
 
     else:
         ParserException(
@@ -195,29 +201,29 @@ def fetch_production(
             zone_key,
         )
 
-    return data_list
+    return production_breakdowns.to_list()
 
 
 @refetch_frequency(timedelta(days=1))
 def fetch_exchange(
-    zone_key1: str = "CZ",
-    zone_key2: str = "DE",
+    zone_key1: ZoneKey = ZoneKey("CZ"),
+    zone_key2: ZoneKey = ZoneKey("DE"),
     session: Session = Session(),
-    target_datetime: Optional[datetime] = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[dict]:
+) -> list[dict]:
     return __get_exchange_data(
         zone_key1, zone_key2, session, target_datetime, logger, mode="Actual"
     )
 
 
 def fetch_exchange_forecast(
-    zone_key1: str = "CZ",
-    zone_key2: str = "DE",
+    zone_key1: ZoneKey = ZoneKey("CZ"),
+    zone_key2: ZoneKey = ZoneKey("DE"),
     session: Session = Session(),
-    target_datetime: Optional[datetime] = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> List[dict]:
+) -> list[dict]:
     return __get_exchange_data(
         zone_key1, zone_key2, session, target_datetime, logger, mode="Planned"
     )
@@ -233,4 +239,4 @@ if __name__ == "__main__":
     # print("fetch_exchange_forecast('AT', 'CZ') ->")
     # print(fetch_exchange_forecast("AT", "CZ"))
     print("fetch_exchange('AT', 'CZ') ->")
-    print(fetch_exchange("AT", "CZ"))
+    print(fetch_exchange(ZoneKey("AT"), ZoneKey("CZ")))

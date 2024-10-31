@@ -2,10 +2,13 @@ import * as SliderPrimitive from '@radix-ui/react-slider';
 import { scaleLinear } from 'd3-scale';
 import { useNightTimes } from 'hooks/nightTimes';
 import { useDarkMode } from 'hooks/theme';
-import { useAtom } from 'jotai/react';
-import { TimeAverages } from 'utils/constants';
-import { getZoneFromPath } from 'utils/helpers';
-import { timeAverageAtom } from 'utils/state/atoms';
+import { useAtom, useAtomValue } from 'jotai';
+import { ChevronsLeftRight, Moon, Sun } from 'lucide-react';
+import { ReactElement } from 'react';
+import trackEvent from 'utils/analytics';
+import { TimeAverages, TrackEvent } from 'utils/constants';
+import { useGetZoneFromPath } from 'utils/helpers';
+import { isHourlyAtom, timeAverageAtom } from 'utils/state/atoms';
 
 type NightTimeSet = number[];
 
@@ -15,23 +18,21 @@ export interface TimeSliderProps {
   selectedIndex?: number;
 }
 
-export const COLORS = {
-  light: {
-    day: 'rgb(243,244,246)', // bg-gray-100
-    night: 'rgb(209,213,219)', // bg-gray-300
-  },
-  dark: {
-    day: 'rgb(75,85,99)', // bg-gray-600
-    night: 'rgb(55,65,81)', // bg-gray-700
-  },
-};
+export enum COLORS {
+  LIGHT_DAY = 'rgb(243,244,246)', // bg-gray-100
+  LIGHT_NIGHT = 'rgb(209,213,219)', // bg-gray-300
+  DARK_DAY = 'rgb(75,85,99)', // bg-gray-600
+  DARK_NIGHT = 'rgb(55,65,81)', // bg-gray-700
+}
 
 export const getTrackBackground = (
   isDarkModeEnabled: boolean,
   numberOfEntries: number,
   sets?: NightTimeSet[]
 ) => {
-  const colors = isDarkModeEnabled ? COLORS.dark : COLORS.light;
+  const colors = isDarkModeEnabled
+    ? { day: COLORS.DARK_DAY, night: COLORS.DARK_NIGHT }
+    : { day: COLORS.LIGHT_DAY, night: COLORS.LIGHT_NIGHT };
 
   if (!sets || sets.length === 0) {
     return colors.day;
@@ -54,19 +55,33 @@ export const getTrackBackground = (
   )`;
 };
 
-export const getThumbIcon = (selectedIndex?: number, sets?: NightTimeSet[]) => {
-  if (!selectedIndex || !sets || sets.length === 0) {
-    return 'slider-thumb.svg';
+export const getThumbIcon = (
+  selectedIndex?: number,
+  sets?: NightTimeSet[]
+): ReactElement => {
+  const size = 20;
+  if (selectedIndex === undefined || !sets || sets.length === 0) {
+    return <ChevronsLeftRight size={size} pointerEvents="none" />;
   }
   const isValueAtNight = sets.some(
     ([start, end]) => selectedIndex >= start && selectedIndex <= end && start !== end
   );
-  return isValueAtNight ? 'slider-thumb-night.svg' : 'slider-thumb-day.svg';
+  return isValueAtNight ? (
+    <Moon size={size} pointerEvents="none" />
+  ) : (
+    <Sun size={size} pointerEvents="none" />
+  );
 };
+
+function trackTimeSliderEvent(selectedIndex: number, timeAverage: TimeAverages) {
+  trackEvent(TrackEvent.TIME_SLIDER_BUTTON, {
+    selectedIndex: `${timeAverage}: ${selectedIndex}`,
+  });
+}
 
 export type TimeSliderBasicProps = TimeSliderProps & {
   trackBackground: string;
-  thumbIcon: string;
+  thumbIcon: ReactElement;
 };
 export function TimeSliderBasic({
   onChange,
@@ -75,15 +90,19 @@ export function TimeSliderBasic({
   trackBackground,
   thumbIcon,
 }: TimeSliderBasicProps) {
+  const [timeAverage] = useAtom(timeAverageAtom);
   return (
     <SliderPrimitive.Root
       defaultValue={[0]}
       max={numberOfEntries}
       step={1}
       value={selectedIndex && selectedIndex > 0 ? [selectedIndex] : [0]}
-      onValueChange={(value) => onChange(value[0])}
-      aria-label="value"
-      className="relative mb-2 flex h-5 w-full touch-none items-center"
+      onValueChange={(value) => {
+        onChange(value[0]);
+        trackTimeSliderEvent(value[0], timeAverage);
+      }}
+      aria-label="choose time"
+      className="relative mb-2 flex h-5 w-full touch-none items-center hover:cursor-pointer"
     >
       <SliderPrimitive.Track
         className="relative h-2.5 w-full grow rounded-sm"
@@ -93,12 +112,11 @@ export function TimeSliderBasic({
       </SliderPrimitive.Track>
       <SliderPrimitive.Thumb
         data-test-id="time-slider-input"
-        className={`block h-6 w-6 rounded-full bg-white
-          bg-center bg-no-repeat shadow-3xl focus:outline-none
-          focus-visible:ring focus-visible:ring-brand-green/10
-          focus-visible:ring-opacity-75 dark:bg-gray-400 dark:focus-visible:ring-white/70`}
-        style={{ backgroundImage: `url(/images/${thumbIcon})` }}
-      ></SliderPrimitive.Thumb>
+        className="flex h-7 w-7 items-center justify-center rounded-full bg-white outline
+           outline-1 outline-neutral-200 hover:outline-2 focus-visible:outline-2 dark:bg-gray-900 dark:outline-gray-700"
+      >
+        {thumbIcon}
+      </SliderPrimitive.Thumb>
     </SliderPrimitive.Root>
   );
 }
@@ -129,9 +147,9 @@ export function TimeSliderWithNight(props: TimeSliderProps) {
 }
 
 function TimeSlider(props: TimeSliderProps) {
-  const zoneId = getZoneFromPath();
-  const [timeAverage] = useAtom(timeAverageAtom);
-  const showNightTime = zoneId && timeAverage === TimeAverages.HOURLY;
+  const zoneId = useGetZoneFromPath();
+  const isHourly = useAtomValue(isHourlyAtom);
+  const showNightTime = zoneId && isHourly;
 
   return showNightTime ? (
     <TimeSliderWithNight {...props} />

@@ -12,18 +12,18 @@ import {
 import { useGetGeometries } from 'features/map/map-utils/getMapGrid';
 import { useEffect, useState } from 'react';
 import { getSunrise, getSunset } from 'sunrise-sunset-js';
-import { getZoneFromPath } from 'utils/helpers';
+import { useGetZoneFromPath } from 'utils/helpers';
 
 export function useNightTimes() {
   const { data } = useGetZone();
-  const geometries = useGetGeometries();
-  const zoneId = getZoneFromPath();
+  const { worldGeometries } = useGetGeometries();
+  const zoneId = useGetZoneFromPath();
   const [nightTimes, setNightTimes] = useState<number[][] | undefined>(undefined);
 
   useEffect(() => {
     if (zoneId && data) {
       // get latitude and longitude of zone
-      const feature = geometries.features.find(
+      const feature = worldGeometries.features.find(
         (feature) => feature.properties.zoneId === zoneId
       );
       const coord = feature?.properties.center;
@@ -46,7 +46,7 @@ export function useNightTimes() {
         setNightTimes(undefined);
       }
     }
-  }, [zoneId, data]);
+  }, [zoneId, data, worldGeometries.features]);
 
   return nightTimes;
 }

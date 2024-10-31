@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from logging import Logger, getLogger
-from typing import List, Optional, Union
+from zoneinfo import ZoneInfo
 
-import arrow
 import numpy as np
 import pandas
-import pytz
-from bs4 import BeautifulSoup
 from requests import Session
 
 from electricitymap.contrib.lib.models.event_lists import (
@@ -54,12 +51,12 @@ CORRECT_NEGATIVE_PRODUCTION_MODES_WITH_ZERO = [
 ]
 STORAGE_MAPPING = {"batteries": "battery"}
 
-MX_EXCHANGE_URL = "http://www.cenace.gob.mx/Paginas/Publicas/Info/DemandaRegional.aspx"
+TIMEZONE = ZoneInfo("US/Pacific")
 
 
-def get_target_url(target_datetime: Optional[datetime], kind: str) -> str:
+def get_target_url(target_datetime: datetime | None, kind: str) -> str:
     if target_datetime is None:
-        target_datetime = datetime.now(tz=pytz.UTC)
+        target_datetime = datetime.now(tz=timezone.utc)
         target_url = REAL_TIME_URL_MAPPING[kind]
     else:
         target_url = f"{CAISO_PROXY}/outlook/SP/History/{target_datetime.strftime('%Y%m%d')}/{HISTORICAL_URL_MAPPING[kind]}.csv?host=https://www.caiso.com"
@@ -78,34 +75,33 @@ def add_production_to_dict(mode: str, value: float, production_dict: dict) -> di
 @refetch_frequency(timedelta(days=1))
 def fetch_production(
     zone_key: ZoneKey = ZoneKey("US-CAL-CISO"),
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
 ) -> list:
     """Requests the last known production mix (in MW) of a given country."""
     target_url = get_target_url(target_datetime, kind="production")
 
     if target_datetime is None:
-        target_datetime = arrow.now(tz="US/Pacific").floor("day").datetime
+        target_datetime = datetime.now(tz=TIMEZONE).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
 
     # Get the production from the CSV
     csv = pandas.read_csv(target_url)
 
     # Filter out last row if timestamp is 00:00
-    if csv.iloc[-1]["Time"] == "OO:OO":
-        df = csv.copy().iloc[:-1]
-    else:
-        df = csv.copy()
+    df = csv.copy().iloc[:-1] if csv.iloc[-1]["Time"] == "OO:OO" else csv.copy()
 
     # lower case column names
     df.columns = [col.lower() for col in df.columns]
 
     all_data_points = ProductionBreakdownList(logger)
-    for index, row in df.iterrows():
+    for _index, row in df.iterrows():
         production_mix = ProductionMix()
         storage_mix = StorageMix()
         row_datetime = target_datetime.replace(
-            hour=int(row["time"][:2]), minute=int(row["time"][-2:])
+            hour=int(row["time"][:2]), minute=int(row["time"][-2:]), tzinfo=TIMEZONE
         )
 
         for mode in [
@@ -133,7 +129,7 @@ def fetch_production(
             production=production_mix,
             storage=storage_mix,
             source="caiso.com",
-            datetime=arrow.get(row_datetime).replace(tzinfo="US/Pacific").datetime,
+            datetime=row_datetime,
         )
 
     return all_data_points.to_list()
@@ -142,8 +138,8 @@ def fetch_production(
 @refetch_frequency(timedelta(days=1))
 def fetch_consumption(
     zone_key: ZoneKey = ZoneKey("US-CAL-CISO"),
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
 ) -> list:
     """Requests the last known production mix (in MW) of a given country."""
@@ -151,73 +147,43 @@ def fetch_consumption(
     target_url = get_target_url(target_datetime, kind="consumption")
 
     if target_datetime is None:
-        target_datetime = arrow.now(tz="US/Pacific").floor("day").datetime
+        target_datetime = datetime.now(tz=TIMEZONE).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
 
     # Get the demand from the CSV
     csv = pandas.read_csv(target_url)
 
     # Filter out last row if timestamp is 00:00
-    if csv.iloc[-1]["Time"] == "OO:OO":
-        df = csv.copy().iloc[:-1]
-    else:
-        df = csv.copy()
+    df = csv.copy().iloc[:-1] if csv.iloc[-1]["Time"] == "OO:OO" else csv.copy()
 
     all_data_points = TotalConsumptionList(logger)
     for row in df.itertuples():
         consumption = row._3
         row_datetime = target_datetime.replace(
-            hour=int(row.Time[:2]), minute=int(row.Time[-2:])
+            hour=int(row.Time[:2]), minute=int(row.Time[-2:]), tzinfo=TIMEZONE
         )
         if not np.isnan(consumption):
             all_data_points.append(
                 zoneKey=zone_key,
                 consumption=consumption,
                 source="caiso.com",
-                datetime=arrow.get(row_datetime).replace(tzinfo="US/Pacific").datetime,
+                datetime=row_datetime,
             )
 
     return all_data_points.to_list()
-
-
-def fetch_MX_exchange(s: Session) -> float:
-    req = s.get(MX_EXCHANGE_URL)
-    soup = BeautifulSoup(req.text, "html.parser")
-    exchange_div = soup.find("div", attrs={"id": "IntercambioUSA-BCA"})
-    val = exchange_div.text
-
-    # cenace html uses unicode hyphens instead of minus signs
-    try:
-        val = val.replace(chr(8208), chr(45))
-    except ValueError:
-        pass
-
-    # negative value indicates flow from CA to MX
-
-    return float(val)
 
 
 @refetch_frequency(timedelta(days=1))
 def fetch_exchange(
     zone_key1: str,
     zone_key2: str,
-    session: Optional[Session] = None,
-    target_datetime: Optional[datetime] = None,
+    session: Session | None = None,
+    target_datetime: datetime | None = None,
     logger: Logger = getLogger(__name__),
-) -> Union[List[dict], dict]:
+) -> list[dict] | dict:
     """Requests the last known power exchange (in MW) between two zones."""
     sorted_zone_keys = "->".join(sorted([zone_key1, zone_key2]))
-
-    s = session or Session()
-
-    if sorted_zone_keys == "MX-BC->US-CA" or sorted_zone_keys == "MX-BC->US-CAL-CISO":
-        netflow = fetch_MX_exchange(s)
-        exchange = {
-            "sortedZoneKeys": sorted_zone_keys,
-            "datetime": arrow.now("America/Tijuana").datetime,
-            "netFlow": netflow,
-            "source": "cenace.gob.mx",
-        }
-        return exchange
 
     # CSV has imports to California as positive.
     # Electricity Map expects A->B to indicate flow to B as positive.
@@ -228,14 +194,12 @@ def fetch_exchange(
     daily_data = []
     for i in range(0, latest_index + 1):
         h, m = map(int, csv["Time"][i].split(":"))
-        date = (
-            arrow.utcnow()
-            .to("US/Pacific")
-            .replace(hour=h, minute=m, second=0, microsecond=0)
+        date = datetime.now(tz=TIMEZONE).replace(
+            hour=h, minute=m, second=0, microsecond=0
         )
         data = {
             "sortedZoneKeys": sorted_zone_keys,
-            "datetime": date.datetime,
+            "datetime": date,
             "netFlow": float(csv["Imports"][i]),
             "source": "caiso.com",
         }
@@ -256,7 +220,5 @@ if __name__ == "__main__":
     print('fetch_exchange("US-CA", "US") ->')
     # pprint(fetch_exchange("US-CA", "US"))
 
-    print('fetch_exchange("MX-BC", "US-CA")')
-    pprint(fetch_exchange("MX-BC", "US-CA"))
     # pprint(fetch_production(target_datetime=datetime(2023,1,20)))s
     pprint(fetch_consumption(target_datetime=datetime(2022, 2, 22)))
